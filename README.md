@@ -1,0 +1,108 @@
+# Eventory Backend
+
+Backend API for **Eventory**, an Event Resource Management System.
+
+- Backend repo: `Neos26/Eventory-backend` (this repo)
+- Frontend repo: `Neos26/Eventory-frontend`
+
+**Status:** Day 1 — backend foundation only (frontend not started yet).
+
+## Tech Stack
+
+- **Runtime:** Node.js
+- **Framework:** Express.js
+- **Database:** MongoDB with Mongoose ODM
+- **Language:** JavaScript
+
+## Project Structure
+
+```
+Eventory-backend/          (repo root)
+└── server/
+    ├── app.js               # Express app: JSON, CORS, routes, 404, error handler
+    ├── server.js            # Loads .env, connects to MongoDB, starts listening
+    ├── package.json
+    ├── .env.example         # Copy to .env and adjust
+    ├── config/
+    │   └── database.js      # Mongoose connection helper
+    ├── models/              # Mongoose schemas
+    ├── controllers/         # Request handlers
+    ├── routes/              # Route definitions
+    └── middleware/          # 404 + global error handler
+```
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18+ (developed on Node 24)
+- MongoDB running locally (via Docker or a native install)
+
+### 1. Install dependencies
+
+```bash
+cd server
+npm install
+```
+
+### 2. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+| Variable     | Default                              | Purpose                        |
+| ------------ | ------------------------------------ | ------------------------------ |
+| `PORT`       | `5000`                               | API port                       |
+| `MONGODB_URI`| `mongodb://127.0.0.1:27017/eventory` | MongoDB connection string      |
+| `CLIENT_URL` | `http://localhost:5173`              | React origin allowed by CORS   |
+
+### 3. Start MongoDB (Docker)
+
+```bash
+docker run -d --name eventory-mongo -p 27017:27017 -v eventory-mongo-data:/data/db --restart unless-stopped mongo:7
+```
+
+### 4. Run the server
+
+```bash
+npm run dev   # nodemon, restarts on file changes
+npm start     # plain node
+```
+
+## API
+
+### `GET /api/health`
+
+```json
+{
+  "success": true,
+  "status": "ok",
+  "message": "Eventory API is running",
+  "database": "connected",
+  "timestamp": "2026-09-29T14:49:19.603Z"
+}
+```
+
+Unknown routes return `404` and errors are handled by a global error-handling middleware.
+
+## Data Models
+
+| Model                 | Purpose                                                            |
+| --------------------- | ------------------------------------------------------------------ |
+| `Organization`        | Company / event planner that owns everything                       |
+| `Event`               | Central entity — belongs to an organization, optional venue        |
+| `Venue`               | Physical location that can host events                             |
+| `Resource`            | Reusable item (chairs, projectors, catering sets, ...)             |
+| `ResourceRequirement` | "Event needs N units of resource X on date Y"                      |
+| `ResourceReservation` | Actual booking of resource quantity for a time period              |
+
+Relationships: `Organization` → `Event` → `ResourceRequirement` → `ResourceReservation`, with `Venue` and `Resource` referenced where needed.
+
+## Roadmap
+
+- [x] Day 1 — server, DB connection, health check, error handling, 6 models
+- [ ] Authentication & authorization
+- [ ] CRUD APIs for events, venues, resources
+- [ ] Requirement → reservation workflow with stock management
+- [ ] React frontend
