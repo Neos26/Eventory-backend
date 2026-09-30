@@ -18,10 +18,17 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Allow the React frontend (CLIENT_URL) to talk to this API.
+// Allow the React frontend to talk to this API. CLIENT_URL may list several
+// origins (comma separated) because Vite falls back to the next free port
+// when 5173 is already in use.
+const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: allowedOrigins,
     credentials: true,
   })
 );
