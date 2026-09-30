@@ -2,6 +2,10 @@ const express = require('express');
 const cors = require('cors');
 
 const healthRoutes = require('./routes/healthRoutes');
+const organizationRoutes = require('./routes/organizationRoutes');
+const eventRoutes = require('./routes/eventRoutes');
+const venueRoutes = require('./routes/venueRoutes');
+const resourceRoutes = require('./routes/resourceRoutes');
 const notFound = require('./middleware/notFound');
 const errorHandler = require('./middleware/errorHandler');
 
@@ -27,6 +31,10 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/api', healthRoutes);
+app.use('/api/organizations', organizationRoutes);
+app.use('/api/events', eventRoutes);
+app.use('/api/venues', venueRoutes);
+app.use('/api/resources', resourceRoutes);
 
 // 404 for unknown routes, then the global error handler.
 app.use(notFound);
