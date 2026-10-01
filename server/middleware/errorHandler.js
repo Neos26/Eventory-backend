@@ -10,6 +10,8 @@ const errorHandler = (err, req, res, next) => {
 
   // Mongoose errors are client problems, not server crashes.
   if (err.name === 'ValidationError' || err.name === 'CastError') statusCode = 400;
+  // Update matched no document (e.g. it was deleted between read and write).
+  if (err.name === 'DocumentNotFoundError') statusCode = 404;
   if (err.code === 11000) statusCode = 409;
 
   let message = err.message || 'Internal server error';

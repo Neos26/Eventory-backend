@@ -1,4 +1,5 @@
 const Resource = require('../models/Resource');
+const ResourceRequirement = require('../models/ResourceRequirement');
 const ResourceReservation = require('../models/ResourceReservation');
 const { asyncHandler, HttpError, validateId } = require('../utils/api');
 
@@ -43,6 +44,14 @@ const deleteResource = asyncHandler(async (req, res) => {
   validateId(req.params.id, 'Resource');
   const resource = await Resource.findByIdAndDelete(req.params.id);
   if (!resource) throw new HttpError(404, 'Resource not found');
+
+  // Requirements and reservations that reference a deleted resource would
+  // otherwise linger as unfillable entries ("Unknown resource" shortages).
+  await Promise.all([
+    ResourceRequirement.deleteMany({ resource: resource._id }),
+    ResourceReservation.deleteMany({ resource: resource._id }),
+  ]);
+
   res.json({ success: true, message: 'Resource deleted', data: resource });
 });
 

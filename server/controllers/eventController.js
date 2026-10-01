@@ -153,6 +153,14 @@ const deleteEvent = asyncHandler(async (req, res) => {
   validateId(req.params.id, 'Event');
   const event = await Event.findByIdAndDelete(req.params.id);
   if (!event) throw new HttpError(404, 'Event not found');
+
+  // Requirements and reservations belong to the event. Removing them keeps
+  // stock holds and dashboard shortages from outliving a deleted event.
+  await Promise.all([
+    ResourceRequirement.deleteMany({ event: event._id }),
+    ResourceReservation.deleteMany({ event: event._id }),
+  ]);
+
   res.json({ success: true, message: 'Event deleted', data: event });
 });
 

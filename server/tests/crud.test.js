@@ -6,6 +6,8 @@ const Organization = require('../models/Organization');
 const Venue = require('../models/Venue');
 const Resource = require('../models/Resource');
 const Event = require('../models/Event');
+const ResourceRequirement = require('../models/ResourceRequirement');
+const ResourceReservation = require('../models/ResourceReservation');
 
 const TEST_URI = 'mongodb://127.0.0.1:27017/eventory_test';
 
@@ -63,6 +65,28 @@ describe('organizations CRUD', () => {
       .get(`/api/organizations/${new mongoose.Types.ObjectId()}`)
       .expect(404);
   });
+
+  test('array request bodies are rejected with 400', async () => {
+    await request(app).post('/api/organizations').send([{ name: 'A' }]).expect(400);
+    const list = await request(app).get('/api/organizations').expect(200);
+    expect(list.body.count).toBe(0);
+  });
+
+  test('a body _id is stripped - the id comes from the URL', async () => {
+    const created = await request(app)
+      .post('/api/organizations')
+      .send({ name: 'Original' })
+      .expect(201);
+    const id = created.body.data._id;
+    const forgedId = new mongoose.Types.ObjectId().toString();
+
+    const updated = await request(app)
+      .put(`/api/organizations/${id}`)
+      .send({ _id: forgedId, name: 'Renamed' })
+      .expect(200);
+    expect(updated.body.data._id).toBe(id);
+    expect(updated.body.data.name).toBe('Renamed');
+  });
 });
 
 describe('venues CRUD', () => {
@@ -113,6 +137,35 @@ describe('resources CRUD', () => {
     expect(updated.body.data.quantityTotal).toBe(120);
 
     await request(app).delete(`/api/resources/${id}`).expect(200);
+  });
+
+  test('deleting a resource removes its requirements and reservations', async () => {
+    const org = await Organization.create({ name: 'Res Org' });
+    const event = await Event.create({
+      organization: org._id,
+      name: 'Res Event',
+      startDate: new Date('2026-07-01T09:00:00Z'),
+      endDate: new Date('2026-07-01T17:00:00Z'),
+    });
+    const resource = await Resource.create({ name: 'Speakers', quantityTotal: 6 });
+    await ResourceRequirement.create({
+      event: event._id,
+      resource: resource._id,
+      quantity: 2,
+      requiredDate: new Date('2026-07-01T09:00:00Z'),
+    });
+    await ResourceReservation.create({
+      event: event._id,
+      resource: resource._id,
+      quantity: 2,
+      reservedFrom: new Date('2026-07-01T09:00:00Z'),
+      reservedUntil: new Date('2026-07-01T17:00:00Z'),
+    });
+
+    await request(app).delete(`/api/resources/${resource._id}`).expect(200);
+
+    expect(await ResourceRequirement.countDocuments({ resource: resource._id })).toBe(0);
+    expect(await ResourceReservation.countDocuments({ resource: resource._id })).toBe(0);
   });
 });
 
@@ -185,6 +238,47 @@ describe('events CRUD', () => {
 
     await request(app).delete(`/api/events/${id}`).expect(200);
     await request(app).get(`/api/events/${id}`).expect(404);
+  });
+
+  test('deleting an event removes its requirements and reservations', async () => {
+    const resource = await Resource.create({ name: 'Mics', quantityTotal: 10 });
+    const created = await request(app)
+      .post('/api/events')
+      .send({
+        organization: orgId,
+        name: 'Cleanup Event',
+        startDate: new Date('2026-06-01T09:00:00Z'),
+        endDate: new Date('2026-06-01T17:00:00Z'),
+      })
+      .expect(201);
+    const eventId = created.body.data._id;
+
+    await request(app)
+      .post(`/api/events/${eventId}/requirements`)
+      .send({ resource: resource._id, quantity: 4 })
+      .expect(201);
+    await request(app)
+      .post('/api/reservations')
+      .send({
+        event: eventId,
+        resource: resource._id,
+        quantity: 4,
+        reservedFrom: new Date('2026-06-01T09:00:00Z'),
+        reservedUntil: new Date('2026-06-01T17:00:00Z'),
+      })
+      .expect(201);
+
+    await request(app).delete(`/api/events/${eventId}`).expect(200);
+
+    expect(await ResourceRequirement.countDocuments({ event: eventId })).toBe(0);
+    expect(await ResourceReservation.countDocuments({ event: eventId })).toBe(0);
+
+    // The stock the deleted event held must be free again.
+    const avail = await request(app)
+      .get(`/api/resources/${resource._id}/availability`)
+      .expect(200);
+    expect(avail.body.data.available).toBe(10);
+    expect(avail.body.data.reserved).toBe(0);
   });
 
   test('missing required fields return 400', async () => {
