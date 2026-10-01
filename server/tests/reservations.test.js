@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const request = require('supertest');
+const { authedRequest, registerToken } = require('./helpers/authedRequest');
 
 const app = require('../app');
 const Organization = require('../models/Organization');
@@ -12,12 +12,15 @@ const TEST_URI = 'mongodb://127.0.0.1:27017/eventory_test';
 
 jest.setTimeout(30000);
 
+let token;
+
 beforeAll(async () => {
   await mongoose.connect(TEST_URI);
+  token = await registerToken(app, 'reservation-manager@eventory.test');
 });
 
 afterEach(async () => {
-  const collections = Object.values(mongoose.connection.collections);
+  const collections = Object.values(mongoose.connection.collections).filter((collection) => collection.collectionName !== 'users');
   await Promise.all(collections.map((c) => c.deleteMany({})));
 });
 
@@ -63,7 +66,7 @@ const body = (overrides = {}) => ({
 
 describe('reservations CRUD', () => {
   test('create, list, get, update, delete with populated refs', async () => {
-    const created = await request(app).post('/api/reservations').send(body()).expect(201);
+    const created = await authedRequest(app, token).post('/api/reservations').send(body()).expect(201);
     expect(created.body.success).toBe(true);
     expect(created.body.data.status).toBe('reserved');
     expect(created.body.data.event.name).toBe('Test Event');
@@ -71,45 +74,45 @@ describe('reservations CRUD', () => {
     expect(created.body.data.resource.unit).toBe('unit');
     const id = created.body.data._id;
 
-    const list = await request(app).get('/api/reservations').expect(200);
+    const list = await authedRequest(app, token).get('/api/reservations').expect(200);
     expect(list.body.count).toBe(1);
 
-    const single = await request(app).get(`/api/reservations/${id}`).expect(200);
+    const single = await authedRequest(app, token).get(`/api/reservations/${id}`).expect(200);
     expect(single.body.data._id).toBe(id);
 
-    const updated = await request(app)
+    const updated = await authedRequest(app, token)
       .put(`/api/reservations/${id}`)
       .send({ quantity: 25, notes: 'extra chairs' })
       .expect(200);
     expect(updated.body.data.quantity).toBe(25);
     expect(updated.body.data.notes).toBe('extra chairs');
 
-    await request(app).delete(`/api/reservations/${id}`).expect(200);
-    await request(app).get(`/api/reservations/${id}`).expect(404);
+    await authedRequest(app, token).delete(`/api/reservations/${id}`).expect(200);
+    await authedRequest(app, token).get(`/api/reservations/${id}`).expect(404);
   });
 
   test('missing or unknown references return 400', async () => {
-    await request(app).post('/api/reservations').send({}).expect(400);
+    await authedRequest(app, token).post('/api/reservations').send({}).expect(400);
 
-    const ghostEvent = await request(app)
+    const ghostEvent = await authedRequest(app, token)
       .post('/api/reservations')
       .send(body({ event: new mongoose.Types.ObjectId() }))
       .expect(400);
     expect(ghostEvent.body.message).toMatch(/Event not found/);
 
-    const ghostResource = await request(app)
+    const ghostResource = await authedRequest(app, token)
       .post('/api/reservations')
       .send(body({ resource: new mongoose.Types.ObjectId() }))
       .expect(400);
     expect(ghostResource.body.message).toMatch(/Resource not found/);
 
-    await request(app).get('/api/reservations/not-an-id').expect(400);
-    await request(app).get(`/api/reservations/${new mongoose.Types.ObjectId()}`).expect(404);
-    await request(app).put('/api/reservations/not-an-id').send({ quantity: 5 }).expect(400);
+    await authedRequest(app, token).get('/api/reservations/not-an-id').expect(400);
+    await authedRequest(app, token).get(`/api/reservations/${new mongoose.Types.ObjectId()}`).expect(404);
+    await authedRequest(app, token).put('/api/reservations/not-an-id').send({ quantity: 5 }).expect(400);
   });
 
   test('date ordering, quantity and status validators reject bad input', async () => {
-    const badDates = await request(app)
+    const badDates = await authedRequest(app, token)
       .post('/api/reservations')
       .send(
         body({
@@ -120,14 +123,14 @@ describe('reservations CRUD', () => {
       .expect(400);
     expect(badDates.body.message).toMatch(/Reserved until/i);
 
-    const zeroQuantity = await request(app)
+    const zeroQuantity = await authedRequest(app, token)
       .post('/api/reservations')
       .send(body({ quantity: 0 }))
       .expect(400);
     expect(zeroQuantity.body.message).toMatch(/whole number/i);
 
-    const created = await request(app).post('/api/reservations').send(body()).expect(201);
-    await request(app)
+    const created = await authedRequest(app, token).post('/api/reservations').send(body()).expect(201);
+    await authedRequest(app, token)
       .put(`/api/reservations/${created.body.data._id}`)
       .send({ status: 'bogus' })
       .expect(400);
@@ -136,91 +139,91 @@ describe('reservations CRUD', () => {
 
 describe('reservation stock enforcement', () => {
   test('cannot reserve more than available; exact boundary passes', async () => {
-    await request(app).post('/api/reservations').send(body({ quantity: 60 })).expect(201);
+    await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 60 })).expect(201);
 
-    const over = await request(app)
+    const over = await authedRequest(app, token)
       .post('/api/reservations')
       .send(body({ quantity: 50 }))
       .expect(400);
     expect(over.body.message).toMatch(/Only 40 available/);
 
-    await request(app).post('/api/reservations').send(body({ quantity: 40 })).expect(201);
+    await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 40 })).expect(201);
   });
 
   test('cancelling frees stock for new reservations', async () => {
-    const first = await request(app).post('/api/reservations').send(body({ quantity: 100 })).expect(201);
+    const first = await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 100 })).expect(201);
     const id = first.body.data._id;
 
-    const exhausted = await request(app)
+    const exhausted = await authedRequest(app, token)
       .post('/api/reservations')
       .send(body({ quantity: 1 }))
       .expect(400);
     expect(exhausted.body.message).toMatch(/No stock available/);
 
-    let availability = await request(app)
+    let availability = await authedRequest(app, token)
       .get(`/api/resources/${resource._id}/availability`)
       .expect(200);
     expect(availability.body.data.reserved).toBe(100);
     expect(availability.body.data.available).toBe(0);
 
-    const cancelled = await request(app)
+    const cancelled = await authedRequest(app, token)
       .put(`/api/reservations/${id}`)
       .send({ status: 'cancelled' })
       .expect(200);
     expect(cancelled.body.data.status).toBe('cancelled');
 
-    availability = await request(app)
+    availability = await authedRequest(app, token)
       .get(`/api/resources/${resource._id}/availability`)
       .expect(200);
     expect(availability.body.data.reserved).toBe(0);
     expect(availability.body.data.available).toBe(100);
 
-    await request(app).post('/api/reservations').send(body({ quantity: 100 })).expect(201);
+    await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 100 })).expect(201);
   });
 
   test('releasing issued stock (returned) frees it', async () => {
-    const first = await request(app).post('/api/reservations').send(body({ quantity: 100 })).expect(201);
+    const first = await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 100 })).expect(201);
     const id = first.body.data._id;
 
-    const issued = await request(app)
+    const issued = await authedRequest(app, token)
       .put(`/api/reservations/${id}`)
       .send({ status: 'issued' })
       .expect(200);
     expect(issued.body.data.status).toBe('issued');
-    await request(app).post('/api/reservations').send(body({ quantity: 1 })).expect(400);
+    await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 1 })).expect(400);
 
-    const returned = await request(app)
+    const returned = await authedRequest(app, token)
       .put(`/api/reservations/${id}`)
       .send({ status: 'returned' })
       .expect(200);
     expect(returned.body.data.status).toBe('returned');
 
-    await request(app).post('/api/reservations').send(body({ quantity: 10 })).expect(201);
+    await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 10 })).expect(201);
   });
 
   test('update guards count other reservations only, not the one being edited', async () => {
-    const first = await request(app).post('/api/reservations').send(body({ quantity: 60 })).expect(201);
-    const second = await request(app).post('/api/reservations').send(body({ quantity: 40 })).expect(201);
+    const first = await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 60 })).expect(201);
+    const second = await authedRequest(app, token).post('/api/reservations').send(body({ quantity: 40 })).expect(201);
 
     // Others hold 40, so 61 does not fit; keeping 60 stays valid.
-    const tooBig = await request(app)
+    const tooBig = await authedRequest(app, token)
       .put(`/api/reservations/${first.body.data._id}`)
       .send({ quantity: 61 })
       .expect(400);
     expect(tooBig.body.message).toMatch(/Only 60 available/);
 
-    await request(app)
+    await authedRequest(app, token)
       .put(`/api/reservations/${first.body.data._id}`)
       .send({ quantity: 60 })
       .expect(200);
 
     // Freeing the other reservation opens up the whole stock.
-    await request(app)
+    await authedRequest(app, token)
       .put(`/api/reservations/${second.body.data._id}`)
       .send({ status: 'cancelled' })
       .expect(200);
 
-    const grown = await request(app)
+    const grown = await authedRequest(app, token)
       .put(`/api/reservations/${first.body.data._id}`)
       .send({ quantity: 100 })
       .expect(200);
@@ -228,14 +231,14 @@ describe('reservation stock enforcement', () => {
   });
 
   test('a cancelled reservation does not block edits to dates or notes', async () => {
-    const created = await request(app).post('/api/reservations').send(body()).expect(201);
+    const created = await authedRequest(app, token).post('/api/reservations').send(body()).expect(201);
     const id = created.body.data._id;
 
-    await request(app).put(`/api/reservations/${id}`).send({ status: 'cancelled' }).expect(200);
+    await authedRequest(app, token).put(`/api/reservations/${id}`).send({ status: 'cancelled' }).expect(200);
 
     // Status is inactive, so even an oversized quantity update is allowed -
     // stock checks only apply while the reservation holds stock.
-    const updated = await request(app)
+    const updated = await authedRequest(app, token)
       .put(`/api/reservations/${id}`)
       .send({ notes: 'released early', quantity: 500 })
       .expect(200);

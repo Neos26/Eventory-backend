@@ -9,6 +9,12 @@ const eventSchema = new mongoose.Schema(
       ref: 'Organization',
       required: true,
     },
+    // The user (booker) who created the event. Ownership is what stops one
+    // booker from editing another booker's event by guessing the id.
+    bookerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
     name: {
       type: String,
       required: [true, 'Event name is required'],

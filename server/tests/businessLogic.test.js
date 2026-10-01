@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const request = require('supertest');
+const { authedRequest, registerToken } = require('./helpers/authedRequest');
 
 const app = require('../app');
 const Organization = require('../models/Organization');
@@ -13,12 +13,15 @@ const TEST_URI = 'mongodb://127.0.0.1:27017/eventory_test';
 
 jest.setTimeout(30000);
 
+let token;
+
 beforeAll(async () => {
   await mongoose.connect(TEST_URI);
+  token = await registerToken(app, 'logic-manager@eventory.test');
 });
 
 afterEach(async () => {
-  const collections = Object.values(mongoose.connection.collections);
+  const collections = Object.values(mongoose.connection.collections).filter((collection) => collection.collectionName !== 'users');
   await Promise.all(collections.map((c) => c.deleteMany({})));
 });
 
@@ -58,7 +61,7 @@ beforeEach(async () => {
 
 describe('venue availability', () => {
   test('free window on an active venue is available', async () => {
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/venues/${venue._id}/availability`)
       .query({ start: '2026-07-01T09:00:00Z', end: '2026-07-01T17:00:00Z' })
       .expect(200);
@@ -67,7 +70,7 @@ describe('venue availability', () => {
   });
 
   test('window overlapping an existing event reports the conflict', async () => {
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/venues/${venue._id}/availability`)
       .query({ start: '2026-06-01T12:00:00Z', end: '2026-06-01T14:00:00Z' })
       .expect(200);
@@ -77,7 +80,7 @@ describe('venue availability', () => {
   });
 
   test('adjacent (touching) windows do not overlap', async () => {
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/venues/${venue._id}/availability`)
       .query({ start: '2026-06-01T17:00:00Z', end: '2026-06-01T19:00:00Z' })
       .expect(200);
@@ -88,7 +91,7 @@ describe('venue availability', () => {
     venue.isActive = false;
     await venue.save();
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/venues/${venue._id}/availability`)
       .query({ start: '2026-07-01T09:00:00Z', end: '2026-07-01T17:00:00Z' })
       .expect(200);
@@ -96,7 +99,7 @@ describe('venue availability', () => {
   });
 
   test('date-only query covers the whole day', async () => {
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/venues/${venue._id}/availability`)
       .query({ date: '2026-06-01' })
       .expect(200);
@@ -104,13 +107,13 @@ describe('venue availability', () => {
   });
 
   test('missing query params return 400', async () => {
-    await request(app).get(`/api/venues/${venue._id}/availability`).expect(400);
+    await authedRequest(app, token).get(`/api/venues/${venue._id}/availability`).expect(400);
   });
 });
 
 describe('resource availability', () => {
   test('all stock is available when nothing is reserved', async () => {
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/resources/${resource._id}/availability`)
       .expect(200);
     expect(res.body.data.total).toBe(100);
@@ -129,7 +132,7 @@ describe('resource availability', () => {
       status: 'reserved',
     });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/resources/${resource._id}/availability`)
       .expect(200);
     expect(res.body.data.reserved).toBe(40);
@@ -147,7 +150,7 @@ describe('resource availability', () => {
       status: 'returned',
     });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/resources/${resource._id}/availability`)
       .expect(200);
     expect(res.body.data.reserved).toBe(0);
@@ -157,50 +160,50 @@ describe('resource availability', () => {
 
 describe('resource requirements CRUD', () => {
   test('create defaults requiredDate to the event start, list shows populated resource', async () => {
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post(`/api/events/${baseEvent._id}/requirements`)
       .send({ resource: resource._id, quantity: 50 })
       .expect(201);
     expect(created.body.data.requiredDate).toBe(baseEvent.startDate.toISOString());
     expect(created.body.data.resource.name).toBe('Chairs');
 
-    const list = await request(app)
+    const list = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/requirements`)
       .expect(200);
     expect(list.body.count).toBe(1);
 
-    const updated = await request(app)
+    const updated = await authedRequest(app, token)
       .put(`/api/events/${baseEvent._id}/requirements/${created.body.data._id}`)
       .send({ quantity: 60, priority: 'high' })
       .expect(200);
     expect(updated.body.data.quantity).toBe(60);
     expect(updated.body.data.priority).toBe('high');
 
-    await request(app)
+    await authedRequest(app, token)
       .delete(`/api/events/${baseEvent._id}/requirements/${created.body.data._id}`)
       .expect(200);
 
-    const afterDelete = await request(app)
+    const afterDelete = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/requirements`)
       .expect(200);
     expect(afterDelete.body.count).toBe(0);
   });
 
   test('unknown resource reference is rejected with 400', async () => {
-    await request(app)
+    await authedRequest(app, token)
       .post(`/api/events/${baseEvent._id}/requirements`)
       .send({ resource: new mongoose.Types.ObjectId(), quantity: 10 })
       .expect(400);
   });
 
   test('requirement of one event cannot be edited through another event', async () => {
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post(`/api/events/${baseEvent._id}/requirements`)
       .send({ resource: resource._id, quantity: 10 })
       .expect(201);
 
     const otherEvent = await makeEvent({ name: 'Intruder' });
-    await request(app)
+    await authedRequest(app, token)
       .put(`/api/events/${otherEvent._id}/requirements/${created.body.data._id}`)
       .send({ quantity: 99 })
       .expect(404);
@@ -216,7 +219,7 @@ describe('event conflicts', () => {
       endDate: new Date('2026-06-01T20:00:00Z'),
     });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/conflicts`)
       .expect(200);
     expect(res.body.data.venueConflicts).toHaveLength(1);
@@ -232,7 +235,7 @@ describe('event conflicts', () => {
       // no venue
     });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/conflicts`)
       .expect(200);
     expect(res.body.data.venueConflicts).toHaveLength(0);
@@ -249,7 +252,7 @@ describe('event conflicts', () => {
       endDate: new Date('2026-06-01T20:00:00Z'),
     });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/conflicts`)
       .expect(200);
     expect(res.body.data.venueConflicts).toHaveLength(0);
@@ -257,7 +260,7 @@ describe('event conflicts', () => {
   });
 
   test('non-overlapping events have no conflicts', async () => {
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/conflicts`)
       .expect(200);
     expect(res.body.data.venueConflicts).toHaveLength(0);
@@ -271,7 +274,7 @@ describe('event readiness', () => {
   test('not ready without a venue', async () => {
     const noVenue = await makeEvent({ name: 'No Venue Yet' });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${noVenue._id}/readiness`)
       .expect(200);
     expect(res.body.data.ready).toBe(false);
@@ -282,7 +285,7 @@ describe('event readiness', () => {
     venue.isActive = false;
     await venue.save();
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/readiness`)
       .expect(200);
     expect(res.body.data.ready).toBe(false);
@@ -297,7 +300,7 @@ describe('event readiness', () => {
       endDate: new Date('2026-06-01T20:00:00Z'),
     });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/readiness`)
       .expect(200);
     expect(res.body.data.ready).toBe(false);
@@ -307,12 +310,12 @@ describe('event readiness', () => {
   });
 
   test('not ready when requirements exceed available stock', async () => {
-    await request(app)
+    await authedRequest(app, token)
       .post(`/api/events/${baseEvent._id}/requirements`)
       .send({ resource: resource._id, quantity: 150 }) // only 100 chairs exist
       .expect(201);
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/readiness`)
       .expect(200);
     expect(res.body.data.ready).toBe(false);
@@ -332,12 +335,12 @@ describe('event readiness', () => {
     });
 
     // 100 total - 70 reserved by others = 30 available, requirement is 50.
-    await request(app)
+    await authedRequest(app, token)
       .post(`/api/events/${baseEvent._id}/requirements`)
       .send({ resource: resource._id, quantity: 50 })
       .expect(201);
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/readiness`)
       .expect(200);
     expect(res.body.data.resourceIssues[0].available).toBe(30);
@@ -345,7 +348,7 @@ describe('event readiness', () => {
   });
 
   test('this event\'s own reservations do not count against itself', async () => {
-    await request(app)
+    await authedRequest(app, token)
       .post(`/api/events/${baseEvent._id}/requirements`)
       .send({ resource: resource._id, quantity: 50 })
       .expect(201);
@@ -361,7 +364,7 @@ describe('event readiness', () => {
       status: 'reserved',
     });
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/readiness`)
       .expect(200);
     expect(res.body.data.resourceIssues).toHaveLength(0);
@@ -369,12 +372,12 @@ describe('event readiness', () => {
   });
 
   test('ready when venue is active, free, and requirements are covered', async () => {
-    await request(app)
+    await authedRequest(app, token)
       .post(`/api/events/${baseEvent._id}/requirements`)
       .send({ resource: resource._id, quantity: 40 })
       .expect(201);
 
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .get(`/api/events/${baseEvent._id}/readiness`)
       .expect(200);
     expect(res.body.data.ready).toBe(true);

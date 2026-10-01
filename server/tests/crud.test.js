@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const request = require('supertest');
+const { authedRequest, registerToken } = require('./helpers/authedRequest');
 
 const app = require('../app');
 const Organization = require('../models/Organization');
@@ -13,12 +13,15 @@ const TEST_URI = 'mongodb://127.0.0.1:27017/eventory_test';
 
 jest.setTimeout(30000);
 
+let token;
+
 beforeAll(async () => {
   await mongoose.connect(TEST_URI);
+  token = await registerToken(app, 'crud-manager@eventory.test');
 });
 
 afterEach(async () => {
-  const collections = Object.values(mongoose.connection.collections);
+  const collections = Object.values(mongoose.connection.collections).filter((collection) => collection.collectionName !== 'users');
   await Promise.all(collections.map((c) => c.deleteMany({})));
 });
 
@@ -29,7 +32,7 @@ afterAll(async () => {
 
 describe('organizations CRUD', () => {
   test('create, list, get, update, delete', async () => {
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post('/api/organizations')
       .send({ name: 'Acme Events', email: 'info@acme.test' })
       .expect(201);
@@ -37,50 +40,50 @@ describe('organizations CRUD', () => {
     expect(created.body.data.name).toBe('Acme Events');
     const id = created.body.data._id;
 
-    const list = await request(app).get('/api/organizations').expect(200);
+    const list = await authedRequest(app, token).get('/api/organizations').expect(200);
     expect(list.body.count).toBe(1);
 
-    const single = await request(app).get(`/api/organizations/${id}`).expect(200);
+    const single = await authedRequest(app, token).get(`/api/organizations/${id}`).expect(200);
     expect(single.body.data._id).toBe(id);
 
-    const updated = await request(app)
+    const updated = await authedRequest(app, token)
       .put(`/api/organizations/${id}`)
       .send({ name: 'Acme Renamed' })
       .expect(200);
     expect(updated.body.data.name).toBe('Acme Renamed');
 
-    await request(app).delete(`/api/organizations/${id}`).expect(200);
-    const afterDelete = await request(app).get(`/api/organizations/${id}`).expect(404);
+    await authedRequest(app, token).delete(`/api/organizations/${id}`).expect(200);
+    const afterDelete = await authedRequest(app, token).get(`/api/organizations/${id}`).expect(404);
     expect(afterDelete.body.success).toBe(false);
   });
 
   test('missing name returns 400 via validation error', async () => {
-    const res = await request(app).post('/api/organizations').send({}).expect(400);
+    const res = await authedRequest(app, token).post('/api/organizations').send({}).expect(400);
     expect(res.body.success).toBe(false);
   });
 
   test('malformed id returns 400, unknown id returns 404', async () => {
-    await request(app).get('/api/organizations/not-an-id').expect(400);
-    await request(app)
+    await authedRequest(app, token).get('/api/organizations/not-an-id').expect(400);
+    await authedRequest(app, token)
       .get(`/api/organizations/${new mongoose.Types.ObjectId()}`)
       .expect(404);
   });
 
   test('array request bodies are rejected with 400', async () => {
-    await request(app).post('/api/organizations').send([{ name: 'A' }]).expect(400);
-    const list = await request(app).get('/api/organizations').expect(200);
+    await authedRequest(app, token).post('/api/organizations').send([{ name: 'A' }]).expect(400);
+    const list = await authedRequest(app, token).get('/api/organizations').expect(200);
     expect(list.body.count).toBe(0);
   });
 
   test('a body _id is stripped - the id comes from the URL', async () => {
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post('/api/organizations')
       .send({ name: 'Original' })
       .expect(201);
     const id = created.body.data._id;
     const forgedId = new mongoose.Types.ObjectId().toString();
 
-    const updated = await request(app)
+    const updated = await authedRequest(app, token)
       .put(`/api/organizations/${id}`)
       .send({ _id: forgedId, name: 'Renamed' })
       .expect(200);
@@ -91,7 +94,7 @@ describe('organizations CRUD', () => {
 
 describe('venues CRUD', () => {
   test('create, update, delete with nested address', async () => {
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post('/api/venues')
       .send({
         name: 'Grand Hall',
@@ -103,40 +106,40 @@ describe('venues CRUD', () => {
     expect(created.body.data.address.city).toBe('Manila');
     const id = created.body.data._id;
 
-    const updated = await request(app)
+    const updated = await authedRequest(app, token)
       .put(`/api/venues/${id}`)
       .send({ capacity: 400, isActive: false })
       .expect(200);
     expect(updated.body.data.capacity).toBe(400);
     expect(updated.body.data.isActive).toBe(false);
 
-    await request(app).delete(`/api/venues/${id}`).expect(200);
-    await request(app).get(`/api/venues/${id}`).expect(404);
+    await authedRequest(app, token).delete(`/api/venues/${id}`).expect(200);
+    await authedRequest(app, token).get(`/api/venues/${id}`).expect(404);
   });
 });
 
 describe('resources CRUD', () => {
   test('create defaults availability to total, update enforces validators', async () => {
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post('/api/resources')
       .send({ name: 'Chairs', category: 'furniture', quantityTotal: 100 })
       .expect(201);
     expect(created.body.data.quantityAvailable).toBe(100);
     const id = created.body.data._id;
 
-    const bad = await request(app)
+    const bad = await authedRequest(app, token)
       .put(`/api/resources/${id}`)
       .send({ quantityAvailable: 500 })
       .expect(400);
     expect(bad.body.success).toBe(false);
 
-    const updated = await request(app)
+    const updated = await authedRequest(app, token)
       .put(`/api/resources/${id}`)
       .send({ quantityTotal: 120 })
       .expect(200);
     expect(updated.body.data.quantityTotal).toBe(120);
 
-    await request(app).delete(`/api/resources/${id}`).expect(200);
+    await authedRequest(app, token).delete(`/api/resources/${id}`).expect(200);
   });
 
   test('deleting a resource removes its requirements and reservations', async () => {
@@ -162,7 +165,7 @@ describe('resources CRUD', () => {
       reservedUntil: new Date('2026-07-01T17:00:00Z'),
     });
 
-    await request(app).delete(`/api/resources/${resource._id}`).expect(200);
+    await authedRequest(app, token).delete(`/api/resources/${resource._id}`).expect(200);
 
     expect(await ResourceRequirement.countDocuments({ resource: resource._id })).toBe(0);
     expect(await ResourceReservation.countDocuments({ resource: resource._id })).toBe(0);
@@ -181,7 +184,7 @@ describe('events CRUD', () => {
   });
 
   test('create rejects unknown organization/venue references', async () => {
-    await request(app)
+    await authedRequest(app, token)
       .post('/api/events')
       .send({
         organization: new mongoose.Types.ObjectId(),
@@ -191,7 +194,7 @@ describe('events CRUD', () => {
       })
       .expect(400);
 
-    await request(app)
+    await authedRequest(app, token)
       .post('/api/events')
       .send({
         organization: orgId,
@@ -204,7 +207,7 @@ describe('events CRUD', () => {
   });
 
   test('create, list, update (date validator), delete', async () => {
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post('/api/events')
       .send({
         organization: orgId,
@@ -219,10 +222,10 @@ describe('events CRUD', () => {
     expect(created.body.data.status).toBe('draft');
     const id = created.body.data._id;
 
-    const list = await request(app).get('/api/events').expect(200);
+    const list = await authedRequest(app, token).get('/api/events').expect(200);
     expect(list.body.count).toBe(1);
 
-    const renamed = await request(app)
+    const renamed = await authedRequest(app, token)
       .put(`/api/events/${id}`)
       .send({ name: 'Tech Summit 2026', status: 'planned' })
       .expect(200);
@@ -230,19 +233,19 @@ describe('events CRUD', () => {
     expect(renamed.body.data.status).toBe('planned');
 
     // endDate before startDate must be rejected by the model validator.
-    const badDates = await request(app)
+    const badDates = await authedRequest(app, token)
       .put(`/api/events/${id}`)
       .send({ startDate: new Date('2026-06-05'), endDate: new Date('2026-06-01') })
       .expect(400);
     expect(badDates.body.message).toMatch(/End date/i);
 
-    await request(app).delete(`/api/events/${id}`).expect(200);
-    await request(app).get(`/api/events/${id}`).expect(404);
+    await authedRequest(app, token).delete(`/api/events/${id}`).expect(200);
+    await authedRequest(app, token).get(`/api/events/${id}`).expect(404);
   });
 
   test('deleting an event removes its requirements and reservations', async () => {
     const resource = await Resource.create({ name: 'Mics', quantityTotal: 10 });
-    const created = await request(app)
+    const created = await authedRequest(app, token)
       .post('/api/events')
       .send({
         organization: orgId,
@@ -253,11 +256,11 @@ describe('events CRUD', () => {
       .expect(201);
     const eventId = created.body.data._id;
 
-    await request(app)
+    await authedRequest(app, token)
       .post(`/api/events/${eventId}/requirements`)
       .send({ resource: resource._id, quantity: 4 })
       .expect(201);
-    await request(app)
+    await authedRequest(app, token)
       .post('/api/reservations')
       .send({
         event: eventId,
@@ -268,13 +271,13 @@ describe('events CRUD', () => {
       })
       .expect(201);
 
-    await request(app).delete(`/api/events/${eventId}`).expect(200);
+    await authedRequest(app, token).delete(`/api/events/${eventId}`).expect(200);
 
     expect(await ResourceRequirement.countDocuments({ event: eventId })).toBe(0);
     expect(await ResourceReservation.countDocuments({ event: eventId })).toBe(0);
 
     // The stock the deleted event held must be free again.
-    const avail = await request(app)
+    const avail = await authedRequest(app, token)
       .get(`/api/resources/${resource._id}/availability`)
       .expect(200);
     expect(avail.body.data.available).toBe(10);
@@ -282,7 +285,7 @@ describe('events CRUD', () => {
   });
 
   test('missing required fields return 400', async () => {
-    const res = await request(app)
+    const res = await authedRequest(app, token)
       .post('/api/events')
       .send({ organization: orgId, name: 'No dates' })
       .expect(400);

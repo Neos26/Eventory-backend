@@ -12,20 +12,21 @@ const {
   getEventConflicts,
   getEventReadiness,
 } = require('../controllers/eventController');
+const { authenticate, attachUser } = require('../middleware/auth');
 
 const router = express.Router();
 
-router.get('/', getEvents);
-router.get('/:id/conflicts', getEventConflicts);
-router.get('/:id/readiness', getEventReadiness);
-router.get('/:eventId/requirements', getEventRequirements);
-router.get('/:id', getEvent);
-router.post('/', createEvent);
-router.put('/:id', updateEvent);
-router.delete('/:id', deleteEvent);
+router.get('/', attachUser, getEvents);
+router.get('/:id/conflicts', attachUser, getEventConflicts);
+router.get('/:id/readiness', attachUser, getEventReadiness);
+router.get('/:eventId/requirements', attachUser, getEventRequirements);
+router.get('/:id', attachUser, getEvent);
+router.post('/', authenticate, createEvent);
+router.put('/:id', authenticate, updateEvent);
+router.delete('/:id', authenticate, deleteEvent);
 
-router.post('/:eventId/requirements', createEventRequirement);
-router.put('/:eventId/requirements/:requirementId', updateEventRequirement);
-router.delete('/:eventId/requirements/:requirementId', deleteEventRequirement);
+router.post('/:eventId/requirements', authenticate, createEventRequirement);
+router.put('/:eventId/requirements/:requirementId', authenticate, updateEventRequirement);
+router.delete('/:eventId/requirements/:requirementId', authenticate, deleteEventRequirement);
 
 module.exports = router;

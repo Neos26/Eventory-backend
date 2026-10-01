@@ -31,6 +31,26 @@ const findEventOr404 = async (id) => {
   return event;
 };
 
+// Management sees everything; a booker only ever owns their own events.
+const ownsEvent = (user, event) =>
+  user.role === 'management' ||
+  (event.bookerId != null && String(event.bookerId) === String(user._id));
+
+// Read access: anonymous requests keep working (public reads), but an
+// authenticated booker may only open their own events.
+const assertEventReadAccess = (req, event) => {
+  if (req.user && !ownsEvent(req.user, event)) {
+    throw new HttpError(403, 'You are not allowed to view this event.');
+  }
+};
+
+// Write access: always called behind authenticate, so req.user exists.
+const assertEventWriteAccess = (req, event) => {
+  if (!ownsEvent(req.user, event)) {
+    throw new HttpError(403, 'You are not allowed to modify this event.');
+  }
+};
+
 // Checks that a referenced document actually exists before saving it.
 const assertReference = async (Model, id, label) => {
   validateId(id, label);
@@ -110,14 +130,17 @@ const computeConflicts = async (event) => {
 // ---------- events CRUD ----------
 
 // GET /api/events
+// Bookers see only their own events; everyone else sees all.
 const getEvents = asyncHandler(async (req, res) => {
-  const events = await Event.find().sort({ startDate: 1 });
+  const filter = req.user && req.user.role === 'booker' ? { bookerId: req.user._id } : {};
+  const events = await Event.find(filter).sort({ startDate: 1 });
   res.json({ success: true, count: events.length, data: events });
 });
 
 // GET /api/events/:id
 const getEvent = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.id);
+  assertEventReadAccess(req, event);
   res.json({ success: true, data: event });
 });
 
@@ -126,13 +149,15 @@ const createEvent = asyncHandler(async (req, res) => {
   if (req.body.organization) await assertReference(Organization, req.body.organization, 'Organization');
   if (req.body.venue) await assertReference(Venue, req.body.venue, 'Venue');
 
-  const event = await Event.create(req.body);
+  // Ownership always comes from the token - a bookerId in the body is ignored.
+  const event = await Event.create({ ...req.body, bookerId: req.user._id });
   res.status(201).json({ success: true, data: event });
 });
 
 // PUT /api/events/:id
 const updateEvent = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.id);
+  assertEventWriteAccess(req, event);
 
   if ('organization' in req.body && req.body.organization) {
     await assertReference(Organization, req.body.organization, 'Organization');
@@ -150,6 +175,9 @@ const updateEvent = asyncHandler(async (req, res) => {
 
 // DELETE /api/events/:id
 const deleteEvent = asyncHandler(async (req, res) => {
+  const existing = await findEventOr404(req.params.id);
+  assertEventWriteAccess(req, existing);
+
   validateId(req.params.id, 'Event');
   const event = await Event.findByIdAndDelete(req.params.id);
   if (!event) throw new HttpError(404, 'Event not found');
@@ -169,6 +197,7 @@ const deleteEvent = asyncHandler(async (req, res) => {
 // GET /api/events/:eventId/requirements
 const getEventRequirements = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.eventId);
+  assertEventReadAccess(req, event);
   const requirements = await ResourceRequirement.find({ event: event._id })
     .populate('resource', RESOURCE_FIELDS)
     .sort({ createdAt: 1 });
@@ -179,6 +208,7 @@ const getEventRequirements = asyncHandler(async (req, res) => {
 // POST /api/events/:eventId/requirements
 const createEventRequirement = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.eventId);
+  assertEventWriteAccess(req, event);
   const { resource, quantity, requiredDate, priority, notes } = req.body;
 
   if (!resource) throw new HttpError(400, 'resource is required');
@@ -201,6 +231,7 @@ const createEventRequirement = asyncHandler(async (req, res) => {
 // PUT /api/events/:eventId/requirements/:requirementId
 const updateEventRequirement = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.eventId);
+  assertEventWriteAccess(req, event);
   validateId(req.params.requirementId, 'Requirement');
 
   const requirement = await ResourceRequirement.findOne({
@@ -224,6 +255,7 @@ const updateEventRequirement = asyncHandler(async (req, res) => {
 // DELETE /api/events/:eventId/requirements/:requirementId
 const deleteEventRequirement = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.eventId);
+  assertEventWriteAccess(req, event);
   validateId(req.params.requirementId, 'Requirement');
 
   const requirement = await ResourceRequirement.findOneAndDelete({
@@ -240,7 +272,44 @@ const deleteEventRequirement = asyncHandler(async (req, res) => {
 // GET /api/events/:id/conflicts
 const getEventConflicts = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.id);
+  assertEventReadAccess(req, event);
   const { venueConflicts, scheduleConflicts, resourceIssues } = await computeConflicts(event);
+
+  // Flat, spec-friendly list alongside the grouped arrays above:
+  // [{ type: "RESOURCE_SHORTAGE", resource, required, available, shortage }, ...]
+  const conflicts = [];
+  if (event.endDate <= event.startDate) {
+    conflicts.push({ type: 'INVALID_SCHEDULE', message: 'End time is not after start time' });
+  }
+  const venuePairIds = new Set(venueConflicts.map((conflict) => String(conflict._id)));
+  for (const conflict of venueConflicts) {
+    conflicts.push({
+      type: 'VENUE_CONFLICT',
+      venue: event.venue ? event.venue.name : null,
+      event: conflict.name,
+      startDate: conflict.startDate,
+      endDate: conflict.endDate,
+    });
+  }
+  for (const conflict of scheduleConflicts) {
+    if (venuePairIds.has(String(conflict._id))) continue; // venue already reports it
+    conflicts.push({
+      type: 'SCHEDULE_CONFLICT',
+      event: conflict.name,
+      startDate: conflict.startDate,
+      endDate: conflict.endDate,
+    });
+  }
+  for (const issue of resourceIssues) {
+    conflicts.push({
+      type: 'RESOURCE_SHORTAGE',
+      resource: issue.resource,
+      resourceId: issue.resourceId,
+      required: issue.required,
+      available: issue.available,
+      shortage: issue.shortage,
+    });
+  }
 
   res.json({
     success: true,
@@ -249,6 +318,7 @@ const getEventConflicts = asyncHandler(async (req, res) => {
       venueConflicts,
       scheduleConflicts,
       resourceConflicts: resourceIssues,
+      conflicts,
       hasConflicts:
         venueConflicts.length + scheduleConflicts.length + resourceIssues.length > 0,
     },
@@ -258,6 +328,7 @@ const getEventConflicts = asyncHandler(async (req, res) => {
 // GET /api/events/:id/readiness
 const getEventReadiness = asyncHandler(async (req, res) => {
   const event = await findEventOr404(req.params.id);
+  assertEventReadAccess(req, event);
   const { venueConflicts, scheduleConflicts, resourceIssues } = await computeConflicts(event);
 
   const venueAvailable = Boolean(event.venue) && event.venue.isActive && venueConflicts.length === 0;

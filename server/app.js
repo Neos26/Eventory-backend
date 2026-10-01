@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 
 const healthRoutes = require('./routes/healthRoutes');
+const authRoutes = require('./routes/authRoutes');
+const bookingRoutes = require('./routes/bookingRoutes');
 const organizationRoutes = require('./routes/organizationRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const statisticsRoutes = require('./routes/statisticsRoutes');
@@ -59,6 +61,8 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/api', healthRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/bookings', bookingRoutes);
 app.use('/api/organizations', organizationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 // Literal paths (/statistics, /utilization) must be matched before the
