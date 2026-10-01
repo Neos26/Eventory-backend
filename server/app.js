@@ -9,6 +9,7 @@ const utilizationRoutes = require('./routes/utilizationRoutes');
 const eventRoutes = require('./routes/eventRoutes');
 const venueRoutes = require('./routes/venueRoutes');
 const resourceRoutes = require('./routes/resourceRoutes');
+const reservationRoutes = require('./routes/reservationRoutes');
 const notFound = require('./middleware/notFound');
 const errorHandler = require('./middleware/errorHandler');
 
@@ -50,6 +51,7 @@ app.use('/api/events', eventRoutes);
 app.use('/api/venues', venueRoutes);
 app.use('/api/resources', utilizationRoutes);
 app.use('/api/resources', resourceRoutes);
+app.use('/api/reservations', reservationRoutes);
 
 // 404 for unknown routes, then the global error handler.
 app.use(notFound);
