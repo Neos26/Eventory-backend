@@ -38,7 +38,7 @@ Eventory-backend/          (repo root)
 ### Prerequisites
 
 - Node.js 18+ (developed on Node 24)
-- MongoDB running locally (via Docker or a native install)
+- MongoDB running locally
 
 ### 1. Install dependencies
 
@@ -59,20 +59,14 @@ cp .env.example .env
 | `MONGODB_URI`| `mongodb://127.0.0.1:27017/eventory` | MongoDB connection string      |
 | `CLIENT_URL` | `http://localhost:5173`              | React origin allowed by CORS   |
 
-### 3. Start MongoDB (Docker)
-
-```bash
-docker run -d --name eventory-mongo -p 27017:27017 -v eventory-mongo-data:/data/db --restart unless-stopped mongo:7
-```
-
-### 4. Run the server
+### 3. Run the server
 
 ```bash
 npm run dev   # nodemon, restarts on file changes
 npm start     # plain node
 ```
 
-### 5. Seed demo data (optional)
+### 4. Seed demo data (optional)
 
 ```bash
 npm run seed
@@ -83,7 +77,7 @@ organizations, venues, a resource catalog, ~44 events with venue/schedule
 conflicts, resource shortages and booking requests, so every list, conflict
 and readiness screen has data.
 
-### 6. Run the tests
+### 5. Run the tests
 
 ```bash
 npm test      # Jest integration tests against the eventory_test database
