@@ -65,7 +65,7 @@ const detectConflicts = async (activeEvents) => {
       }
     }
 
-    const available = requirement.resource.quantityTotal - reservedByOthers;
+    const available = Math.max(0, requirement.resource.quantityTotal - reservedByOthers);
     const shortage = requirement.quantity - available;
     if (shortage > 0) {
       const owner = activeEvents.find((event) => String(event._id) === requirementEvent);

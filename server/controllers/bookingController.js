@@ -166,7 +166,7 @@ const approveBooking = asyncHandler(async (req, res) => {
 
   const conflicts = [];
 
-  // 3) Invalid schedule (defensive: the model normally prevents this).
+  // 3) Invalid schedule.
   if (event.endDate <= event.startDate) {
     conflicts.push({ type: 'INVALID_SCHEDULE', message: 'Event end time is not after its start time' });
   }
@@ -218,7 +218,7 @@ const approveBooking = asyncHandler(async (req, res) => {
       .filter((reservation) => String(reservation.event) !== String(event._id))
       .reduce((sum, reservation) => sum + reservation.quantity, 0);
 
-    const available = requirement.resource.quantityTotal - reservedByOthers;
+    const available = Math.max(0, requirement.resource.quantityTotal - reservedByOthers);
     const shortage = requirement.quantity - available;
     if (shortage > 0) {
       conflicts.push({

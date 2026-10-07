@@ -142,6 +142,37 @@ describe('resources CRUD', () => {
     await authedRequest(app, token).delete(`/api/resources/${id}`).expect(200);
   });
 
+  test('total cannot be lowered below what active reservations hold', async () => {
+    const org = await Organization.create({ name: 'Guard Org' });
+    const event = await Event.create({
+      organization: org._id,
+      name: 'Guard Event',
+      startDate: new Date('2026-07-01T09:00:00Z'),
+      endDate: new Date('2026-07-01T17:00:00Z'),
+    });
+    const resource = await Resource.create({ name: 'Projector', quantityTotal: 10 });
+    await ResourceReservation.create({
+      event: event._id,
+      resource: resource._id,
+      quantity: 6,
+      reservedFrom: new Date('2026-07-01T09:00:00Z'),
+      reservedUntil: new Date('2026-07-01T17:00:00Z'),
+      status: 'reserved',
+    });
+
+    const rejected = await authedRequest(app, token)
+      .put(`/api/resources/${resource._id}`)
+      .send({ quantityTotal: 4 })
+      .expect(400);
+    expect(rejected.body.message).toMatch(/held by active reservations/);
+
+    const allowed = await authedRequest(app, token)
+      .put(`/api/resources/${resource._id}`)
+      .send({ quantityTotal: 8 })
+      .expect(200);
+    expect(allowed.body.data.quantityTotal).toBe(8);
+  });
+
   test('deleting a resource removes its requirements and reservations', async () => {
     const org = await Organization.create({ name: 'Res Org' });
     const event = await Event.create({

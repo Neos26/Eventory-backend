@@ -156,6 +156,26 @@ describe('resource availability', () => {
     expect(res.body.data.reserved).toBe(0);
     expect(res.body.data.available).toBe(100);
   });
+
+  test('over-reserved stock reports zero available, never negative', async () => {
+    const other = await makeEvent({ name: 'Over-reserved Event' });
+    // Inserted directly to simulate legacy data where the total was lowered below
+    // the quantity already held by active reservations.
+    await ResourceReservation.create({
+      event: other._id,
+      resource: resource._id,
+      quantity: 130,
+      reservedFrom: new Date('2026-06-01T09:00:00Z'),
+      reservedUntil: new Date('2026-06-01T17:00:00Z'),
+      status: 'reserved',
+    });
+
+    const res = await authedRequest(app, token)
+      .get(`/api/resources/${resource._id}/availability`)
+      .expect(200);
+    expect(res.body.data.reserved).toBe(130);
+    expect(res.body.data.available).toBe(0);
+  });
 });
 
 describe('resource requirements CRUD', () => {

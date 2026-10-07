@@ -333,6 +333,19 @@ async function main() {
   }
 
   const usage = new Map(resources.map((r) => [String(r._id), 0]));
+  // Stock left to hand out to seeded active reservations: total minus holds
+  // that already exist (fresh DB starts at full stock, re-runs subtract prior holds).
+  const priorHolds = new Map();
+  for (const hold of await ResourceReservation.find({ status: { $in: ACTIVE_RESERVATION_STATUSES } }).select('resource quantity')) {
+    const rid = String(hold.resource);
+    priorHolds.set(rid, (priorHolds.get(rid) || 0) + hold.quantity);
+  }
+  const remainingStock = new Map(
+    resources.map((r) => [
+      String(r._id),
+      Math.max(0, (r.quantityTotal || 0) - (priorHolds.get(String(r._id)) || 0)),
+    ]),
+  );
   let reqCount = 0;
   let resCount = 0;
   const touchedResources = new Set();
@@ -385,22 +398,41 @@ async function main() {
       }
 
       if (reservationQty > 0) {
-        const reservedFrom = new Date(ev.startDate.getTime() - 24 * 60 * 60 * 1000);
-        const endDate = ev.endDate && ev.endDate >= ev.startDate ? ev.endDate : ev.startDate;
-        const reservedUntil = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
-        await ResourceReservation.create({
-          event: ev._id,
-          requirement: requirement._id,
-          resource: res._id,
-          quantity: reservationQty,
-          reservedFrom,
-          reservedUntil,
-          status: reservationStatus,
-          notes: `Seeded reservation for ${ev.name}`,
-        });
-        resCount += 1;
+        // Never hold more stock than actually exists — capped active holds keep
+        // availability (total - reserved) from ever going negative.
+        const resourceKey = String(res._id);
         if (ACTIVE_RESERVATION_STATUSES.includes(reservationStatus)) {
-          touchedResources.add(String(res._id));
+          const capped = Math.min(reservationQty, remainingStock.get(resourceKey) || 0);
+          if (capped !== reservationQty) {
+            // Not enough stock left: downgrade the requirement to match the smaller hold.
+            reservationQty = capped;
+            requirement.status = capped > 0 ? 'partially_reserved' : 'pending';
+            await requirement.save();
+          }
+          if (reservationQty > 0) {
+            remainingStock.set(resourceKey, (remainingStock.get(resourceKey) || 0) - reservationQty);
+          } else {
+            reservationStatus = null;
+          }
+        }
+        if (reservationQty > 0 && reservationStatus) {
+          const reservedFrom = new Date(ev.startDate.getTime() - 24 * 60 * 60 * 1000);
+          const endDate = ev.endDate && ev.endDate >= ev.startDate ? ev.endDate : ev.startDate;
+          const reservedUntil = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
+          await ResourceReservation.create({
+            event: ev._id,
+            requirement: requirement._id,
+            resource: res._id,
+            quantity: reservationQty,
+            reservedFrom,
+            reservedUntil,
+            status: reservationStatus,
+            notes: `Seeded reservation for ${ev.name}`,
+          });
+          resCount += 1;
+          if (ACTIVE_RESERVATION_STATUSES.includes(reservationStatus)) {
+            touchedResources.add(String(res._id));
+          }
         }
       }
     }

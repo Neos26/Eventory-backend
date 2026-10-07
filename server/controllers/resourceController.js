@@ -34,6 +34,25 @@ const updateResource = asyncHandler(async (req, res) => {
   const resource = await Resource.findById(req.params.id);
   if (!resource) throw new HttpError(404, 'Resource not found');
 
+  // Lowering the total below what active reservations already hold would make
+  // available stock negative; the shortfall must be freed first.
+  if (req.body.quantityTotal !== undefined && req.body.quantityTotal !== null) {
+    const nextTotal = Number(req.body.quantityTotal);
+    if (Number.isFinite(nextTotal) && nextTotal < resource.quantityTotal) {
+      const active = await ResourceReservation.find({
+        resource: resource._id,
+        status: { $in: ['reserved', 'issued'] },
+      }).select('quantity');
+      const reserved = active.reduce((sum, reservation) => sum + reservation.quantity, 0);
+      if (nextTotal < reserved) {
+        throw new HttpError(
+          400,
+          `Total quantity cannot be reduced to ${nextTotal} — ${reserved} units are held by active reservations. Cancel or reduce reservations first.`,
+        );
+      }
+    }
+  }
+
   resource.set(req.body);
   await resource.save();
   res.json({ success: true, data: resource });
@@ -68,7 +87,8 @@ const getResourceAvailability = asyncHandler(async (req, res) => {
   }).select('quantity');
 
   const reserved = active.reduce((sum, reservation) => sum + reservation.quantity, 0);
-  const available = resource.quantityTotal - reserved;
+  // Over-reserved stock (legacy data) reports zero available, never negative.
+  const available = Math.max(0, resource.quantityTotal - reserved);
 
   res.json({
     success: true,

@@ -94,7 +94,7 @@ const computeResourceIssues = async (event) => {
     const resource = resourceMap.get(key);
     const total = resource ? resource.quantityTotal : 0;
     const reserved = reservedByOthers.get(key) || 0;
-    const available = total - reserved;
+    const available = Math.max(0, total - reserved);
     const shortage = requirement.quantity - available;
 
     if (shortage > 0) {

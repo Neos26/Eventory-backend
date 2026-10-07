@@ -1,13 +1,6 @@
 const mongoose = require('mongoose');
 
-/**
- * Establishes the connection to MongoDB using the connection string
- * stored in the MONGODB_URI environment variable.
- *
- * The promise is returned so the caller decides how to react to a
- * failure (the server can still start and report the status via
- * GET /api/health).
- */
+
 const connectDB = async () => {
   const uri = process.env.MONGODB_URI;
 
@@ -17,7 +10,6 @@ const connectDB = async () => {
 
   mongoose.set('strictQuery', true);
 
-  // Fail fast instead of hanging for the default 30s when MongoDB is down.
   const conn = await mongoose.connect(uri, {
     serverSelectionTimeoutMS: 5000,
   });
@@ -26,7 +18,6 @@ const connectDB = async () => {
   return conn;
 };
 
-// Simple status helper used by the health-check endpoint.
 const getConnectionState = () => {
   const states = {
     0: 'disconnected',
