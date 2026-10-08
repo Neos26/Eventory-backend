@@ -17,8 +17,9 @@ describe('404 middleware', () => {
     expect(res.body.message).toContain('POST');
   });
 
-  test('root path has no route yet', async () => {
-    const res = await request(app).get('/').expect(404);
-    expect(res.body.success).toBe(false);
+  test('root path reports the backend is running', async () => {
+    const res = await request(app).get('/').expect(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.message).toBe('Eventory backend is running');
   });
 });

@@ -17,7 +17,11 @@ const start = async () => {
   }
 
   app.listen(PORT, () => {
-    console.log(`Eventory API listening on http://localhost:${PORT}`);
+    console.log('--------------------------------------------');
+    console.log(`Eventory backend is running on port ${PORT}`);
+    console.log(`  Base URL:   http://localhost:${PORT}/`);
+    console.log(`  Health:     http://localhost:${PORT}/api/health`);
+    console.log('--------------------------------------------');
   });
 };
 

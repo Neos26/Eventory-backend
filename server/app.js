@@ -74,6 +74,16 @@ app.use('/api/resources', utilizationRoutes);
 app.use('/api/resources', resourceRoutes);
 app.use('/api/reservations', reservationRoutes);
 
+// Friendly liveness response for the bare root URL - everything else lives
+// under /api, so opening http://localhost:5000/ used to hit the 404 handler.
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Eventory backend is running',
+    health: '/api/health',
+  });
+});
+
 // 404 for unknown routes, then the global error handler.
 app.use(notFound);
 app.use(errorHandler);
