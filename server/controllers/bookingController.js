@@ -20,6 +20,15 @@ const populateBooking = (query) =>
 // the response always carries the same populated shape.
 const populatedById = (booking) => populateBooking(Booking.findById(booking._id));
 
+// The event's status mirrors its booking in the booking vocabulary.
+// Terminal events (cancelled/completed) are never rewritten by booking
+// actions - only the manual close/cancel actions set those.
+const syncEventStatus = (eventId, status) =>
+  Event.updateOne(
+    { _id: eventId, status: { $nin: ['cancelled', 'completed'] } },
+    { $set: { status } },
+  );
+
 // Management reviews everything; a booker only ever sees their own bookings.
 // bookerId may be a plain ObjectId (freshly loaded) or a populated user
 // (read responses) - normalise before comparing.
@@ -48,6 +57,15 @@ const createBooking = asyncHandler(async (req, res) => {
   if (event.status === 'cancelled') {
     throw new HttpError(409, 'Cannot create a booking for a cancelled event.');
   }
+  if (event.status === 'completed') {
+    throw new HttpError(409, 'Cannot create a booking for a completed event.');
+  }
+  if (event.endDate < new Date()) {
+    throw new HttpError(
+      409,
+      'This event has already ended. Update the event dates before submitting a booking.',
+    );
+  }
 
   // A booker may only book their own event; management may book any event.
   const isOwner =
@@ -57,12 +75,28 @@ const createBooking = asyncHandler(async (req, res) => {
     throw new HttpError(403, 'You can only create bookings for your own events.');
   }
 
-  const existing = await Booking.findOne({
-    eventId: event._id,
-    status: { $in: BLOCKING_STATUSES },
-  }).select('_id');
-  if (existing) {
+  // Bookings are one-per-event. Resubmitting after a reject or a withdraw
+  // reuses the original row (reset to Pending) instead of inserting a
+  // duplicate; Pending/Approved/Completed rows still block a new request.
+  const existing = await Booking.find({ eventId: event._id }).sort({ createdAt: -1 });
+  const blocking = existing.find((booking) => BLOCKING_STATUSES.includes(booking.status));
+  if (blocking) {
     throw new HttpError(409, 'A booking already exists for this event.');
+  }
+
+  if (existing.length > 0) {
+    const [reuse, ...stale] = existing;
+    reuse.status = 'Pending';
+    reuse.rejectionReason = undefined;
+    if (notes) reuse.notes = notes;
+    reuse.bookerId = req.user._id;
+    await reuse.save();
+    // Collapse duplicates left behind by older resubmits.
+    if (stale.length > 0) {
+      await Booking.deleteMany({ _id: { $in: stale.map((booking) => booking._id) } });
+    }
+    await syncEventStatus(event._id, 'pending');
+    return res.json({ success: true, data: await populatedById(reuse) });
   }
 
   const booking = await Booking.create({
@@ -70,6 +104,7 @@ const createBooking = asyncHandler(async (req, res) => {
     bookerId: req.user._id,
     ...(notes && { notes }),
   });
+  await syncEventStatus(event._id, 'pending');
 
   res.status(201).json({ success: true, data: await populatedById(booking) });
 });
@@ -117,6 +152,9 @@ const cancelBooking = asyncHandler(async (req, res) => {
 
   booking.status = 'Cancelled';
   await booking.save();
+  // Withdrawing a request never closes the event - it goes back to
+  // awaiting a new submission.
+  await syncEventStatus(booking.eventId, 'pending');
 
   res.json({ success: true, data: await populatedById(booking) });
 });
@@ -136,6 +174,7 @@ const rejectBooking = asyncHandler(async (req, res) => {
   booking.status = 'Rejected';
   booking.rejectionReason = reason;
   await booking.save();
+  await syncEventStatus(booking.eventId, 'rejected');
 
   res.json({ success: true, data: await populatedById(booking) });
 });
@@ -151,11 +190,14 @@ const approveBooking = asyncHandler(async (req, res) => {
     throw new HttpError(409, 'Only pending bookings can be reviewed.');
   }
 
-  // 1) Verify the event (still exists, not cancelled).
+  // 1) Verify the event (still exists, not cancelled or already completed).
   const event = await Event.findById(booking.eventId).populate('venue', 'name isActive');
   if (!event) throw new HttpError(404, 'Event not found for this booking');
   if (event.status === 'cancelled') {
     throw new HttpError(409, 'Cannot approve a booking for a cancelled event.');
+  }
+  if (event.status === 'completed') {
+    throw new HttpError(409, 'Cannot approve a booking for a completed event.');
   }
 
   // 2) Verify the venue.
@@ -172,9 +214,10 @@ const approveBooking = asyncHandler(async (req, res) => {
   }
 
   // 3b) Venue conflicts + overlapping events (same organization) on that date.
+  // Cancelled and completed events hold nothing, so they never conflict.
   const overlapping = await Event.find({
     _id: { $ne: event._id },
-    status: { $ne: 'cancelled' },
+    status: { $nin: ['cancelled', 'completed'] },
     startDate: { $lt: event.endDate },
     endDate: { $gt: event.startDate },
   }).select('name startDate endDate venue organization');
@@ -276,6 +319,7 @@ const approveBooking = asyncHandler(async (req, res) => {
   // 6) Mark approved.
   booking.status = 'Approved';
   await booking.save();
+  await syncEventStatus(event._id, 'approved');
 
   res.json({ success: true, data: await populatedById(booking) });
 });

@@ -54,8 +54,11 @@ const eventSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['draft', 'planned', 'ongoing', 'completed', 'cancelled'],
-      default: 'draft',
+      // Mirrors the booking lifecycle: synced from the booking (approve,
+      // reject, resubmit) and only set manually for the terminal actions
+      // (completed / cancelled) in the events controller.
+      enum: ['pending', 'approved', 'rejected', 'cancelled', 'completed'],
+      default: 'pending',
     },
   },
   { timestamps: true }

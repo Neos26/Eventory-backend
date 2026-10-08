@@ -66,6 +66,16 @@ const assertQuantity = (quantity) => {
   }
 };
 
+// A cancelled event holds nothing: refuse any reservation that would still
+// take stock for it (creating one or reactivating an existing hold).
+const assertEventCanHoldStock = async (eventId, status) => {
+  if (!ACTIVE_STATUSES.includes(status)) return;
+  const event = await Event.findById(eventId).select('status');
+  if (event && event.status === 'cancelled') {
+    throw new HttpError(409, 'Cannot hold stock for a cancelled event.');
+  }
+};
+
 // ---------- reservations CRUD ----------
 
 // GET /api/reservations
@@ -96,6 +106,7 @@ const createReservation = asyncHandler(async (req, res) => {
   await assertReference(Event, event, 'Event');
   await assertReference(Resource, resource, 'Resource');
   assertQuantity(quantity);
+  await assertEventCanHoldStock(event, req.body.status ?? 'reserved');
   await assertStockAvailable(resource, quantity);
 
   const reservation = await ResourceReservation.create(req.body);
@@ -124,6 +135,7 @@ const updateReservation = asyncHandler(async (req, res) => {
   // excluded, so keeping the same quantity always passes and cancelling or
   // releasing skips the check entirely.
   if (ACTIVE_STATUSES.includes(reservation.status)) {
+    await assertEventCanHoldStock(reservation.event, reservation.status);
     await assertStockAvailable(reservation.resource, reservation.quantity, reservation._id);
   }
 

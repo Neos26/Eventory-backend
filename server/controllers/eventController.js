@@ -1,4 +1,5 @@
 const Event = require('../models/Event');
+const Booking = require('../models/Booking');
 const Organization = require('../models/Organization');
 const Venue = require('../models/Venue');
 const Resource = require('../models/Resource');
@@ -59,9 +60,10 @@ const assertReference = async (Model, id, label) => {
 };
 
 // Two events overlap when one starts before the other ends.
+// Cancelled and completed events hold nothing, so they never conflict.
 const overlapClause = (event) => ({
   _id: { $ne: event._id },
-  status: { $ne: 'cancelled' },
+  status: { $nin: ['cancelled', 'completed'] },
   startDate: { $lt: event.endDate },
   endDate: { $gt: event.startDate },
 });
@@ -150,7 +152,18 @@ const createEvent = asyncHandler(async (req, res) => {
   if (req.body.venue) await assertReference(Venue, req.body.venue, 'Venue');
 
   // Ownership always comes from the token - a bookerId in the body is ignored.
-  const event = await Event.create({ ...req.body, bookerId: req.user._id });
+  // Status is never set at creation: new events start as 'pending' and are
+  // then driven by their booking.
+  const { status: _status, ...fields } = req.body;
+  // Bookers tied to an organization may only file events under it; the
+  // organization is stamped when the request omits it.
+  if (req.user.role === 'booker' && req.user.organizationId) {
+    if (fields.organization && String(fields.organization) !== String(req.user.organizationId)) {
+      throw new HttpError(400, 'You can only create events for your own organization.');
+    }
+    if (!fields.organization) fields.organization = req.user.organizationId;
+  }
+  const event = await Event.create({ ...fields, bookerId: req.user._id });
   res.status(201).json({ success: true, data: event });
 });
 
@@ -166,10 +179,63 @@ const updateEvent = asyncHandler(async (req, res) => {
     await assertReference(Venue, req.body.venue, 'Venue');
   }
 
+  const wasCompleted = event.status === 'completed';
+  const wasCancelled = event.status === 'cancelled';
+  const nextStatus = 'status' in req.body ? req.body.status : event.status;
+
+  // Status is synced from the booking everywhere except the two manual
+  // close actions: completed (management only) and cancelled (owner or
+  // management). Anything else (including legacy draft/planned values)
+  // is rejected.
+  if ('status' in req.body && nextStatus !== event.status && !['completed', 'cancelled'].includes(nextStatus)) {
+    throw new HttpError(400, "Event status follows the booking and can only be set to 'completed' or 'cancelled'.");
+  }
+
+  // Completing has system-wide side effects (stock returns, bookings close),
+  // so only management may trigger that transition. Cancelling stays open to
+  // the owner - it only drops the event's own holds.
+  if (nextStatus === 'completed' && !wasCompleted && req.user.role !== 'management') {
+    throw new HttpError(403, 'Only management can mark an event as completed.');
+  }
+
   for (const field of EVENT_UPDATABLE) {
     if (field in req.body) event[field] = req.body[field];
   }
   await event.save(); // runs model validators (including date ordering)
+
+  // Terminal statuses release every stock hold the event has:
+  // completing returns what was used, cancelling drops the holds entirely
+  // and closes any booking that was still open.
+  if (!wasCancelled && nextStatus === 'cancelled') {
+    await Promise.all([
+      ResourceReservation.updateMany(
+        { event: event._id, status: { $in: ['reserved', 'issued'] } },
+        { $set: { status: 'cancelled' } },
+      ),
+      Booking.updateMany(
+        { eventId: event._id, status: { $in: ['Pending', 'Approved'] } },
+        { $set: { status: 'Cancelled' } },
+      ),
+    ]);
+  }
+  if (!wasCompleted && nextStatus === 'completed') {
+    await Promise.all([
+      ResourceReservation.updateMany(
+        { event: event._id, status: { $in: ['reserved', 'issued'] } },
+        { $set: { status: 'returned' } },
+      ),
+      Booking.updateMany(
+        { eventId: event._id, status: 'Approved' },
+        { $set: { status: 'Completed' } },
+      ),
+      // Requests that were never reviewed are voided by the completion.
+      Booking.updateMany(
+        { eventId: event._id, status: 'Pending' },
+        { $set: { status: 'Cancelled' } },
+      ),
+    ]);
+  }
+
   res.json({ success: true, data: event });
 });
 
@@ -182,11 +248,13 @@ const deleteEvent = asyncHandler(async (req, res) => {
   const event = await Event.findByIdAndDelete(req.params.id);
   if (!event) throw new HttpError(404, 'Event not found');
 
-  // Requirements and reservations belong to the event. Removing them keeps
-  // stock holds and dashboard shortages from outliving a deleted event.
+  // Requirements, reservations and bookings belong to the event. Removing
+  // them keeps stock holds, dashboard shortages and booking lists from
+  // outliving a deleted event.
   await Promise.all([
     ResourceRequirement.deleteMany({ event: event._id }),
     ResourceReservation.deleteMany({ event: event._id }),
+    Booking.deleteMany({ eventId: event._id }),
   ]);
 
   res.json({ success: true, message: 'Event deleted', data: event });

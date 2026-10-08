@@ -72,9 +72,10 @@ const getVenueAvailability = asyncHandler(async (req, res) => {
   if (endDate < startDate) throw new HttpError(400, 'end must be after start');
 
   // Overlap rule: existing.start < requested.end && existing.end > requested.start
+  // Cancelled and completed events hold the venue no longer.
   const conflicts = await Event.find({
     venue: venue._id,
-    status: { $ne: 'cancelled' },
+    status: { $nin: ['cancelled', 'completed'] },
     startDate: { $lt: endDate },
     endDate: { $gt: startDate },
   }).select('name startDate endDate status');

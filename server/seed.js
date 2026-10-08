@@ -295,6 +295,20 @@ async function main() {
   // --- demo events (skip names that already exist) ---
   const orgIdByName = new Map((await Organization.find()).map((o) => [o.name, o._id]));
   const venueIdByName = new Map((await Venue.find()).map((v) => [v.name, v._id]));
+
+  // Demo bookers are tied to a single organization, matching the locked
+  // organization field on the booker event form (only set while unset).
+  const bookerOrgs = [
+    [B1, 'Campus Activities Board'],
+    [B2, 'Sunrise Catering Group'],
+  ];
+  for (const [email, orgName] of bookerOrgs) {
+    const userId = userIdByEmail.get(email);
+    const orgId = orgIdByName.get(orgName);
+    if (userId && orgId) {
+      await User.updateOne({ _id: userId, organizationId: null }, { $set: { organizationId: orgId } });
+    }
+  }
   const existingEventNames = new Set(
     (await Event.find({ name: { $in: EVENT_DEFS.map((e) => e.name) } }).select('name')).map((e) => e.name)
   );
@@ -305,19 +319,132 @@ async function main() {
       const venue = venueIdByName.get(e.venue);
       if (!organization) throw new Error(`Seed event references unknown organization: ${e.org}`);
       if (!venue) throw new Error(`Seed event references unknown venue: ${e.venue}`);
+      // The demo "ongoing" event always spans today, however far in the
+      // future a fresh seed runs.
+      let startDate = new Date(e.start);
+      let endDate = new Date(e.end);
+      if (e.status === 'ongoing') {
+        startDate = new Date();
+        startDate.setDate(startDate.getDate() - 3);
+        startDate.setHours(9, 0, 0, 0);
+        endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + 4);
+        endDate.setHours(18, 0, 0, 0);
+      }
+      // EVENT_DEFS still uses the old lifecycle words as hints; the model
+      // stores the booking vocabulary (the sync steps below re-derive the
+      // final value from each event's booking anyway).
+      const statusHint = { planned: 'approved', draft: 'pending', ongoing: 'approved' };
       return {
         name: e.name,
         organization,
         venue,
         bookerId: userIdByEmail.get(e.owner),
-        startDate: new Date(e.start),
-        endDate: new Date(e.end),
-        status: e.status,
+        startDate,
+        endDate,
+        status: statusHint[e.status] ?? e.status,
         category: e.category,
         expectedAttendees: e.expectedAttendees,
         description: `${e.name} — ${e.category} event at ${e.venue}. Seeded demo data.`,
       };
     }));
+  }
+
+  // Event status mirrors its booking in the booking vocabulary.
+  // Called twice: before normalization (migrations / existing bookings)
+  // and after the booking loop (fresh databases).
+  //  - cancelled events stay cancelled (they were called off);
+  //  - completed events reopen only when their booking is Rejected
+  //    (so a rejected request on an ended event can be resubmitted);
+  //  - a Cancelled booking only means the request was withdrawn, which
+  //    sends the event back to pending.
+  const bookingStatusToEvent = {
+    Pending: 'pending',
+    Approved: 'approved',
+    Rejected: 'rejected',
+    Cancelled: 'pending',
+    Completed: 'completed',
+  };
+  const syncEventStatuses = async () => {
+    const openEvents = (await Event.find({ status: { $ne: 'cancelled' } }).select('_id status'));
+    if (!openEvents.length) return;
+    const latestBookings = await Booking.find({ eventId: { $in: openEvents.map((e) => e._id) } })
+      .select('eventId status')
+      .sort({ createdAt: -1 });
+    const latestByEvent = new Map();
+    for (const booking of latestBookings) {
+      const key = String(booking.eventId);
+      if (!latestByEvent.has(key)) latestByEvent.set(key, booking.status);
+    }
+    for (const evt of openEvents) {
+      const bookingStatus = latestByEvent.get(String(evt._id));
+      if (!bookingStatus) continue;
+      if (evt.status === 'completed' && bookingStatus !== 'Rejected') continue;
+      const next = bookingStatusToEvent[bookingStatus];
+      if (next && next !== evt.status) {
+        await Event.updateOne({ _id: evt._id }, { $set: { status: next } });
+      }
+    }
+  };
+
+  // Bookings left behind by events deleted at runtime would populate as
+  // null on the frontend; drop them together with their dangling ids.
+  const liveEventIds = (await Event.find().select('_id')).map((event) => event._id);
+  const orphanCount = await Booking.countDocuments({ eventId: { $nin: liveEventIds } });
+  if (orphanCount > 0) {
+    await Booking.deleteMany({ eventId: { $nin: liveEventIds } });
+  }
+
+  await syncEventStatuses();
+
+  // --- normalize terminal states (same cascades the API applies) ---
+  // Terminal events never hold stock: completed returns what was used,
+  // cancelled drops the holds and closes the requirements entirely.
+  const terminalEvents = await Event.find({ status: { $in: ['completed', 'cancelled'] } })
+    .select('_id status');
+  const completedIds = terminalEvents
+    .filter((event) => event.status === 'completed')
+    .map((event) => event._id);
+  const cancelledIds = terminalEvents
+    .filter((event) => event.status === 'cancelled')
+    .map((event) => event._id);
+  if (completedIds.length) {
+    await ResourceReservation.updateMany(
+      { event: { $in: completedIds }, status: { $in: ACTIVE_RESERVATION_STATUSES } },
+      { $set: { status: 'returned' } },
+    );
+    await ResourceRequirement.updateMany(
+      { event: { $in: completedIds }, status: { $in: ['reserved', 'partially_reserved'] } },
+      { $set: { status: 'fulfilled' } },
+    );
+    await Booking.updateMany(
+      { eventId: { $in: completedIds }, status: 'Pending' },
+      { $set: { status: 'Cancelled' } },
+    );
+  }
+  if (cancelledIds.length) {
+    await ResourceReservation.updateMany(
+      { event: { $in: cancelledIds }, status: { $in: ACTIVE_RESERVATION_STATUSES } },
+      { $set: { status: 'cancelled' } },
+    );
+    await ResourceRequirement.updateMany(
+      { event: { $in: cancelledIds }, status: { $ne: 'cancelled' } },
+      { $set: { status: 'cancelled' } },
+    );
+  }
+
+  // Released holds change the cached availability numbers.
+  for (const resource of await Resource.find().select('quantityTotal quantityAvailable')) {
+    const active = await ResourceReservation.find({
+      resource: resource._id,
+      status: { $in: ACTIVE_RESERVATION_STATUSES },
+    }).select('quantity');
+    const reserved = active.reduce((sum, hold) => sum + hold.quantity, 0);
+    const nextAvailable = Math.max(0, (resource.quantityTotal || 0) - reserved);
+    if (nextAvailable !== resource.quantityAvailable) {
+      resource.quantityAvailable = nextAvailable;
+      await resource.save();
+    }
   }
 
   // --- requirements + reservations for every existing event ---
@@ -368,7 +495,13 @@ async function main() {
 
       const total = res.quantityTotal || 1;
       const quantity = Math.max(1, Math.min(total, Math.round(total * FRACTIONS[created % FRACTIONS.length])));
-      const status = REQ_STATUS[(ei + created) % REQ_STATUS.length];
+      let status = REQ_STATUS[(ei + created) % REQ_STATUS.length];
+      // Terminal events never hold stock: cancelled events drop their
+      // requirements, completed events record their work as fulfilled.
+      if (ev.status === 'cancelled') status = 'cancelled';
+      else if (ev.status === 'completed' && (status === 'reserved' || status === 'partially_reserved')) {
+        status = 'fulfilled';
+      }
       const requiredDate = new Date(ev.startDate.getTime() - 24 * 60 * 60 * 1000);
 
       const requirement = await ResourceRequirement.create({
@@ -506,6 +639,10 @@ async function main() {
     await Booking.insertMany(bookingDocs);
     bookingCount = bookingDocs.length;
   }
+
+  // Bookings exist now - re-derive event statuses from them (fresh DBs
+  // have no bookings at the first sync call above).
+  await syncEventStatuses();
 
   const [orgs, venues, res, reqs, reservations, users, eventTotal, bookings] = await Promise.all([
     Organization.countDocuments(),

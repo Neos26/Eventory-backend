@@ -237,6 +237,50 @@ describe('events CRUD', () => {
       .expect(400);
   });
 
+  test('a booker tied to an organization can only create events for it', async () => {
+    const otherOrg = await Organization.create({ name: 'Foreign Org' });
+    const bookerToken = await registerToken(
+      app,
+      'tied-booker@eventory.test',
+      'booker',
+      String(orgId),
+    );
+
+    // Another organization is refused.
+    await authedRequest(app, bookerToken)
+      .post('/api/events')
+      .send({
+        organization: otherOrg._id,
+        name: 'Wrong Org Event',
+        startDate: new Date('2026-06-01T09:00:00Z'),
+        endDate: new Date('2026-06-01T17:00:00Z'),
+      })
+      .expect(400);
+
+    // Their own organization works.
+    const own = await authedRequest(app, bookerToken)
+      .post('/api/events')
+      .send({
+        organization: orgId,
+        name: 'Own Org Event',
+        startDate: new Date('2026-06-01T09:00:00Z'),
+        endDate: new Date('2026-06-01T17:00:00Z'),
+      })
+      .expect(201);
+    expect(String(own.body.data.organization)).toBe(String(orgId));
+
+    // Omitting the organization stamps the booker's own.
+    const stamped = await authedRequest(app, bookerToken)
+      .post('/api/events')
+      .send({
+        name: 'Stamped Event',
+        startDate: new Date('2026-06-02T09:00:00Z'),
+        endDate: new Date('2026-06-02T17:00:00Z'),
+      })
+      .expect(201);
+    expect(String(stamped.body.data.organization)).toBe(String(orgId));
+  });
+
   test('create, list, update (date validator), delete', async () => {
     const created = await authedRequest(app, token)
       .post('/api/events')
@@ -250,7 +294,7 @@ describe('events CRUD', () => {
         expectedAttendees: 150,
       })
       .expect(201);
-    expect(created.body.data.status).toBe('draft');
+    expect(created.body.data.status).toBe('pending');
     const id = created.body.data._id;
 
     const list = await authedRequest(app, token).get('/api/events').expect(200);
@@ -258,10 +302,16 @@ describe('events CRUD', () => {
 
     const renamed = await authedRequest(app, token)
       .put(`/api/events/${id}`)
-      .send({ name: 'Tech Summit 2026', status: 'planned' })
+      .send({ name: 'Tech Summit 2026' })
       .expect(200);
     expect(renamed.body.data.name).toBe('Tech Summit 2026');
-    expect(renamed.body.data.status).toBe('planned');
+    expect(renamed.body.data.status).toBe('pending');
+
+    // Status follows the booking - manual lifecycle values are rejected.
+    await authedRequest(app, token)
+      .put(`/api/events/${id}`)
+      .send({ status: 'approved' })
+      .expect(400);
 
     // endDate before startDate must be rejected by the model validator.
     const badDates = await authedRequest(app, token)

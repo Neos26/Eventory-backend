@@ -4,7 +4,7 @@ const Resource = require('../models/Resource');
 const ResourceReservation = require('../models/ResourceReservation');
 const { asyncHandler } = require('../utils/api');
 
-const EVENT_STATUSES = ['draft', 'planned', 'ongoing', 'completed', 'cancelled'];
+const EVENT_STATUSES = ['pending', 'approved', 'rejected', 'cancelled', 'completed'];
 const ACTIVE_RESERVATION_STATUSES = ['reserved', 'issued'];
 const MONTH_LIMIT = 12;
 

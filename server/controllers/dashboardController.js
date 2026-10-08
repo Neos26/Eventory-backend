@@ -7,6 +7,9 @@ const Venue = require('../models/Venue');
 const { asyncHandler } = require('../utils/api');
 
 const ACTIVE_RESERVATION_STATUSES = ['reserved', 'issued'];
+// Events that still participate in planning: cancelled and completed events
+// hold no venue, schedule or stock.
+const ACTIVE_EVENT_STATUSES = { $nin: ['cancelled', 'completed'] };
 
 // Low stock threshold: at or below 20% of total.
 const LOW_STOCK_RATIO = 0.2;
@@ -69,6 +72,9 @@ const detectConflicts = async (activeEvents) => {
     const shortage = requirement.quantity - available;
     if (shortage > 0) {
       const owner = activeEvents.find((event) => String(event._id) === requirementEvent);
+      // Requirements of cancelled/completed events no longer count as
+      // active shortages (their owner is not in the active list).
+      if (!owner) continue;
       conflicts.push({
         type: 'resource',
         message: `${requirement.resource.name}: required ${requirement.quantity}, available ${available}`,
@@ -76,7 +82,7 @@ const detectConflicts = async (activeEvents) => {
         required: requirement.quantity,
         available,
         shortage,
-        date: owner ? owner.startDate : new Date(),
+        date: owner.startDate,
       });
     }
   }
@@ -96,12 +102,14 @@ const getDashboardSummary = asyncHandler(async (req, res) => {
   ]);
 
   // ---- counts ----
-  const activeEvents = events.filter((event) => event.status !== 'cancelled');
+  const activeEvents = events.filter(
+    (event) => event.status !== 'cancelled' && event.status !== 'completed',
+  );
   const upcoming = activeEvents
     .filter((event) => event.startDate >= now)
     .sort((a, b) => a.startDate - b.startDate);
   const confirmedEvents = events.filter(
-    (event) => event.status === 'planned' || event.status === 'ongoing',
+    (event) => event.status === 'approved',
   ).length;
 
   const conflicts = await detectConflicts(activeEvents);
@@ -185,7 +193,7 @@ const getBookerDashboard = asyncHandler(async (req, res) => {
 
   const [upcomingEvents, pendingBookings, approvedBookings, rejectedBookings, bookings, events] =
     await Promise.all([
-      Event.find({ bookerId, status: { $ne: 'cancelled' }, startDate: { $gte: now } })
+      Event.find({ bookerId, status: ACTIVE_EVENT_STATUSES, startDate: { $gte: now } })
         .populate('venue', 'name')
         .sort({ startDate: 1 })
         .limit(10),
@@ -256,7 +264,9 @@ const getManagementDashboard = asyncHandler(async (req, res) => {
       ),
     ]);
 
-  const activeEvents = events.filter((event) => event.status !== 'cancelled');
+  const activeEvents = events.filter(
+    (event) => event.status !== 'cancelled' && event.status !== 'completed',
+  );
   const upcomingEvents = activeEvents.filter((event) => event.startDate >= now).length;
   const conflicts = await detectConflicts(activeEvents);
 

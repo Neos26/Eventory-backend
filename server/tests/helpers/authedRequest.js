@@ -1,12 +1,13 @@
 const request = require('supertest');
 
-// Registers a throwaway management user and returns a token for it.
-const registerToken = async (app, email, role = 'management') => {
+// Registers a throwaway user and returns a token for it.
+const registerToken = async (app, email, role = 'management', organizationId) => {
   const res = await request(app).post('/api/auth/register').send({
     name: 'Test Manager',
     email,
     password: 'secret123',
     role,
+    ...(organizationId && { organizationId }),
   });
   return res.body.data.token;
 };

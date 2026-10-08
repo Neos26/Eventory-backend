@@ -67,7 +67,7 @@ describe('GET /api/dashboard/summary', () => {
       name: 'Summit A',
       startDate: future,
       endDate: new Date(future.getTime() + 4 * 3600000),
-      status: 'planned',
+      status: 'approved',
     });
     // Overlaps event A at the same venue -> venue conflict.
     await Event.create({
@@ -76,7 +76,7 @@ describe('GET /api/dashboard/summary', () => {
       name: 'Summit B',
       startDate: new Date(future.getTime() + 2 * 3600000),
       endDate: new Date(future.getTime() + 6 * 3600000),
-      status: 'draft',
+      status: 'pending',
     });
     // Completed event in the past -> not upcoming.
     await Event.create({
@@ -100,7 +100,7 @@ describe('GET /api/dashboard/summary', () => {
       name: 'Other Event',
       startDate: new Date(Date.now() + 3 * 86400000),
       endDate: new Date(Date.now() + 3 * 86400000 + 3600000),
-      status: 'planned',
+      status: 'approved',
     });
     // Another event holds most of the chairs -> active reservation counted.
     const chairRequirement = await ResourceRequirement.create({
@@ -124,7 +124,7 @@ describe('GET /api/dashboard/summary', () => {
 
     expect(stats.totalEvents).toBe(4);
     expect(stats.upcomingEvents).toBe(3); // future, non-cancelled
-    expect(stats.confirmedEvents).toBe(2); // planned A + planned other
+    expect(stats.confirmedEvents).toBe(2); // approved A + approved other
     expect(stats.totalResources).toBe(2);
     expect(stats.activeReservations).toBe(1);
     // 1 venue conflict (A x B) + 1 resource shortage (projector 15 > 10)
@@ -155,21 +155,21 @@ describe('GET /api/events/statistics', () => {
       name: 'October Fest',
       startDate: new Date('2026-10-10T09:00:00Z'),
       endDate: new Date('2026-10-10T17:00:00Z'),
-      status: 'planned',
+      status: 'approved',
     });
     await Event.create({
       organization: orgA._id,
       name: 'November Fair',
       startDate: new Date('2026-11-05T09:00:00Z'),
       endDate: new Date('2026-11-05T17:00:00Z'),
-      status: 'draft',
+      status: 'pending',
     });
     await Event.create({
       organization: orgB._id,
       name: 'November Seminar',
       startDate: new Date('2026-11-20T09:00:00Z'),
       endDate: new Date('2026-11-20T17:00:00Z'),
-      status: 'draft',
+      status: 'pending',
     });
 
     const res = await request(app).get('/api/events/statistics').expect(200);
@@ -178,8 +178,8 @@ describe('GET /api/events/statistics', () => {
     expect(total).toBe(3);
 
     const statusMap = Object.fromEntries(byStatus.map((item) => [item.status, item.count]));
-    expect(statusMap.planned).toBe(1);
-    expect(statusMap.draft).toBe(2);
+    expect(statusMap.approved).toBe(1);
+    expect(statusMap.pending).toBe(2);
     expect(statusMap.completed).toBe(0);
     expect(byStatus).toHaveLength(5); // every status present, zero-filled
 
